@@ -468,35 +468,39 @@ public:
 	const auto &aid_src_aux_vel() const { return _aid_src_aux_vel; }
 #endif // CONFIG_EKF2_AUXVEL
 
-	bool measurementUpdate(VectorState &K, float innovation_variance, float innovation)
+	bool measurementUpdate(VectorState &K, const VectorState &H, const float R, const float innovation, const float innovation_variance)
 	{
 		clearInhibitedStateKalmanGains(K);
 
-		const VectorState KS = K * innovation_variance;
-		SquareMatrixState KHP;
+		// Efficient implementation of the Joseph stabilized covariance update
+		// Based on "G. J. Bierman. Factorization Methods for Discrete Sequential Estimation. Academic Press, Dover Publications, New York, 1977, 2006"
 
-		for (unsigned row = 0; row < State::size; row++) {
-			for (unsigned col = 0; col < State::size; col++) {
-				// Instead of literally computing KHP, use an equivalent
-				// equation involving less mathematical operations
-				KHP(row, col) = KS(row) * K(col);
+		// Step 1: conventional update
+		VectorState v = P * H;
+
+		for (unsigned i = 0; i < State::size; i++) {
+			for (unsigned j = 0; j <= i; j++) {
+				P(i, j) = P(i, j) - K(i) * v(j);
+				P(j, i) = P(i, j);
 			}
 		}
 
-		const bool is_healthy = checkAndFixCovarianceUpdate(KHP);
+		// Step 2: stabilized update
+		v = P * H;
 
-		if (is_healthy) {
-			// apply the covariance corrections
-			P -= KHP;
-
-			constrainStateVariances();
-			forceCovarianceSymmetry();
-
-			// apply the state corrections
-			fuse(K, innovation);
+		for (unsigned i = 0; i < State::size; i++) {
+			for (unsigned j = 0; j <= i; j++) {
+				float s = .5f * (P(i, j) - v(i) * K(j) + P(i, j) - v(j) * K(i));
+				P(i, j) = s + K(i) * R * K(j);
+				P(j, i) = P(i, j);
+			}
 		}
 
-		return is_healthy;
+		constrainStateVariances();
+
+		// apply the state corrections
+		fuse(K, innovation);
+		return true;
 	}
 
 	void resetGlobalPosToExternalObservation(double lat_deg, double lon_deg, float accuracy, uint64_t timestamp_observation);
@@ -576,6 +580,7 @@ private:
 	float _yaw_rate_lpf_ef{0.0f};		///< Filtered angular rate about earth frame D axis (rad/sec)
 
 	SquareMatrixState P{};	///< state covariance matrix
+	SquareMatrixState _temp_square_matrix_state{}; ///< Used to pre-allocate a large matrix
 
 #if defined(CONFIG_EKF2_DRAG_FUSION)
 	estimator_aid_source2d_s _aid_src_drag{};
@@ -905,16 +910,28 @@ private:
 	float getMagDeclination();
 #endif // CONFIG_EKF2_MAGNETOMETER
 
-	void clearInhibitedStateKalmanGains(VectorState &K) const
+	// returns true if the Kalman gains were modified
+	bool clearInhibitedStateKalmanGains(VectorState &K) const
 	{
+		static constexpr float kMinKalmanGain = 1e-9f;
+		bool kalman_gains_modified = false;
+
 		for (unsigned i = 0; i < State::gyro_bias.dof; i++) {
 			if (_gyro_bias_inhibit[i]) {
+				if (K(State::gyro_bias.idx + i) > kMinKalmanGain || K(State::gyro_bias.idx + i) < -kMinKalmanGain) {
+					kalman_gains_modified = true;
+				}
+
 				K(State::gyro_bias.idx + i) = 0.f;
 			}
 		}
 
 		for (unsigned i = 0; i < State::accel_bias.dof; i++) {
 			if (_accel_bias_inhibit[i]) {
+				if (K(State::accel_bias.idx + i) > kMinKalmanGain || K(State::accel_bias.idx + i) < -kMinKalmanGain) {
+					kalman_gains_modified = true;
+				}
+
 				K(State::accel_bias.idx + i) = 0.f;
 			}
 		}
@@ -922,12 +939,20 @@ private:
 #if defined(CONFIG_EKF2_MAGNETOMETER)
 		if (!_control_status.flags.mag) {
 			for (unsigned i = 0; i < State::mag_I.dof; i++) {
+				if (K(State::mag_I.idx + i) > kMinKalmanGain || K(State::mag_I.idx + i) < -kMinKalmanGain) {
+					kalman_gains_modified = true;
+				}
+
 				K(State::mag_I.idx + i) = 0.f;
 			}
 		}
 
 		if (!_control_status.flags.mag) {
 			for (unsigned i = 0; i < State::mag_B.dof; i++) {
+				if (K(State::mag_B.idx + i) > kMinKalmanGain || K(State::mag_B.idx + i) < -kMinKalmanGain) {
+					kalman_gains_modified = true;
+				}
+
 				K(State::mag_B.idx + i) = 0.f;
 			}
 		}
@@ -936,10 +961,17 @@ private:
 #if defined(CONFIG_EKF2_WIND)
 		if (!_control_status.flags.wind) {
 			for (unsigned i = 0; i < State::wind_vel.dof; i++) {
+
+				if (K(State::wind_vel.idx + i) > kMinKalmanGain || K(State::wind_vel.idx + i) < -kMinKalmanGain) {
+					kalman_gains_modified = true;
+				}
+
 				K(State::wind_vel.idx + i) = 0.f;
 			}
 		}
 #endif // CONFIG_EKF2_WIND
+
+		return kalman_gains_modified;
 	}
 
 	// if the covariance correction will result in a negative variance, then

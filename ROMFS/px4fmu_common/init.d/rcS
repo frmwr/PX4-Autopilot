@@ -36,6 +36,11 @@ set SDCARD_FORMAT no
 set STARTUP_TUNE 1
 set VEHICLE_TYPE none
 
+# Airframe parameter versioning: airframe maintainers can optionally set this in the
+# airframe startup script, and then increase it by one whenever they want to ensure
+# that parameters are reset to the airframe defaults for an update.
+set PARAM_DEFAULTS_VER 1
+
 #
 # Print full system version.
 #
@@ -178,10 +183,11 @@ else
 	#
 	# If the airframe has been previously reset SYS_AUTCONFIG will have been set to 1 and other params will be reset on the next boot.
 	#
-	if param greater SYS_AUTOCONFIG 0
+	if [ param greater SYS_AUTOCONFIG 0 -o ! param compare SYS_PARAM_VER ${PARAM_DEFAULTS_VER} ]
 	then
 		# Reset params except Airframe, RC calibration, sensor calibration, flight modes, total flight time, and next flight UUID.
 		param reset_all SYS_AUTOSTART RC* CAL_* COM_FLTMODE* LND_FLIGHT* TC_* COM_FLIGHT*
+		param set SYS_PARAM_VER ${PARAM_DEFAULTS_VER}
 	fi
 
 	#
@@ -556,6 +562,7 @@ unset LOGGER_ARGS
 unset LOGGER_BUF
 unset PARAM_FILE
 unset PARAM_BACKUP_FILE
+unset PARAM_DEFAULTS_VER
 unset RC_INPUT_ARGS
 unset SDCARD_AVAILABLE
 unset SDCARD_EXT_PATH

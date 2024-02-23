@@ -476,21 +476,21 @@ public:
 		// Based on "G. J. Bierman. Factorization Methods for Discrete Sequential Estimation. Academic Press, Dover Publications, New York, 1977, 2006"
 
 		// Step 1: conventional update
-		VectorState v = P * H;
+		VectorState PH = P * H;
 
 		for (unsigned i = 0; i < State::size; i++) {
 			for (unsigned j = 0; j <= i; j++) {
-				P(i, j) = P(i, j) - K(i) * v(j);
+				P(i, j) = P(i, j) - K(i) * PH(j);
 				P(j, i) = P(i, j);
 			}
 		}
 
 		// Step 2: stabilized update
-		v = P * H;
+		PH = P * H;
 
 		for (unsigned i = 0; i < State::size; i++) {
 			for (unsigned j = 0; j <= i; j++) {
-				float s = .5f * (P(i, j) - v(i) * K(j) + P(i, j) - v(j) * K(i));
+				float s = .5f * (P(i, j) - PH(i) * K(j) + P(i, j) - PH(j) * K(i));
 				P(i, j) = s + K(i) * R * K(j);
 				P(j, i) = P(i, j);
 			}

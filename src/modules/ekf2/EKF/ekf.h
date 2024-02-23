@@ -468,7 +468,7 @@ public:
 	const auto &aid_src_aux_vel() const { return _aid_src_aux_vel; }
 #endif // CONFIG_EKF2_AUXVEL
 
-	bool measurementUpdate(VectorState &K, const VectorState &H, const float R, const float innovation, const float innovation_variance)
+	bool measurementUpdate(VectorState &K, const VectorState &H, const float R, const float innovation)
 	{
 		clearInhibitedStateKalmanGains(K);
 
@@ -580,7 +580,6 @@ private:
 	float _yaw_rate_lpf_ef{0.0f};		///< Filtered angular rate about earth frame D axis (rad/sec)
 
 	SquareMatrixState P{};	///< state covariance matrix
-	SquareMatrixState _temp_square_matrix_state{}; ///< Used to pre-allocate a large matrix
 
 #if defined(CONFIG_EKF2_DRAG_FUSION)
 	estimator_aid_source2d_s _aid_src_drag{};
@@ -910,28 +909,16 @@ private:
 	float getMagDeclination();
 #endif // CONFIG_EKF2_MAGNETOMETER
 
-	// returns true if the Kalman gains were modified
-	bool clearInhibitedStateKalmanGains(VectorState &K) const
+	void clearInhibitedStateKalmanGains(VectorState &K) const
 	{
-		static constexpr float kMinKalmanGain = 1e-9f;
-		bool kalman_gains_modified = false;
-
 		for (unsigned i = 0; i < State::gyro_bias.dof; i++) {
 			if (_gyro_bias_inhibit[i]) {
-				if (K(State::gyro_bias.idx + i) > kMinKalmanGain || K(State::gyro_bias.idx + i) < -kMinKalmanGain) {
-					kalman_gains_modified = true;
-				}
-
 				K(State::gyro_bias.idx + i) = 0.f;
 			}
 		}
 
 		for (unsigned i = 0; i < State::accel_bias.dof; i++) {
 			if (_accel_bias_inhibit[i]) {
-				if (K(State::accel_bias.idx + i) > kMinKalmanGain || K(State::accel_bias.idx + i) < -kMinKalmanGain) {
-					kalman_gains_modified = true;
-				}
-
 				K(State::accel_bias.idx + i) = 0.f;
 			}
 		}
@@ -939,20 +926,12 @@ private:
 #if defined(CONFIG_EKF2_MAGNETOMETER)
 		if (!_control_status.flags.mag) {
 			for (unsigned i = 0; i < State::mag_I.dof; i++) {
-				if (K(State::mag_I.idx + i) > kMinKalmanGain || K(State::mag_I.idx + i) < -kMinKalmanGain) {
-					kalman_gains_modified = true;
-				}
-
 				K(State::mag_I.idx + i) = 0.f;
 			}
 		}
 
 		if (!_control_status.flags.mag) {
 			for (unsigned i = 0; i < State::mag_B.dof; i++) {
-				if (K(State::mag_B.idx + i) > kMinKalmanGain || K(State::mag_B.idx + i) < -kMinKalmanGain) {
-					kalman_gains_modified = true;
-				}
-
 				K(State::mag_B.idx + i) = 0.f;
 			}
 		}
@@ -961,27 +940,14 @@ private:
 #if defined(CONFIG_EKF2_WIND)
 		if (!_control_status.flags.wind) {
 			for (unsigned i = 0; i < State::wind_vel.dof; i++) {
-
-				if (K(State::wind_vel.idx + i) > kMinKalmanGain || K(State::wind_vel.idx + i) < -kMinKalmanGain) {
-					kalman_gains_modified = true;
-				}
-
 				K(State::wind_vel.idx + i) = 0.f;
 			}
 		}
 #endif // CONFIG_EKF2_WIND
-
-		return kalman_gains_modified;
 	}
-
-	// if the covariance correction will result in a negative variance, then
-	// the covariance matrix is unhealthy and must be corrected
-	bool checkAndFixCovarianceUpdate(const SquareMatrixState &KHP);
 
 	// limit the diagonal of the covariance matrix
 	void constrainStateVariances();
-
-	void forceCovarianceSymmetry();
 
 	void constrainStateVar(const IdxDof &state, float min, float max);
 	void constrainStateVarLimitRatio(const IdxDof &state, float min, float max, float max_ratio = 1.e6f);
